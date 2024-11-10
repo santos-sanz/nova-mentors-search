@@ -47,7 +47,7 @@ nova-mentors-search/
 1. Clone the repository:
 ```bash
 git clone https://github.com/yourusername/nova-mentors-search.git
-cd nova-mentors-search
+cd nova-mentors-search/scripts
 ```
 
 2. Install dependencies:
