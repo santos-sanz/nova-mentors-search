@@ -2,3 +2,7 @@ Nova - Mentoring.html
 mentors.csv
 __pycache__/
 scraping.log
+.env
+affinity_scores.json
+extracted_keywords.json
+mentors_with_affinities.csv
