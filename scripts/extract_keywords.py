@@ -70,8 +70,8 @@ def extract_keywords(description: str, client: OpenAI) -> list:
                         "content": KEYWORD_EXTRACTION_PROMPT["user"].format(description)
                     }
                 ],
-                temperature=0.3,
-                max_tokens=100
+                temperature=float(os.getenv('TEMPERATURE_KEYWORDS')),
+                max_tokens=int(os.getenv('MAX_TOKENS_KEYWORDS'))
             )
             
             content = response.choices[0].message.content.strip()

@@ -4,6 +4,8 @@ from openai import OpenAI
 import os
 from dotenv import load_dotenv
 from prompts import AFFINITY_EVALUATION_PROMPT
+from typing import List
+import sys
 
 # Load environment variables
 load_dotenv()
@@ -34,32 +36,11 @@ def create_context(row):
     """Creates context by combining position and description"""
     return f"{row['position']} - {row['description']}"
 
-def get_affinity_scores(context, keywords, client):
-    """Gets affinity scores using OpenAI API"""
-    prompt = AFFINITY_EVALUATION_PROMPT["user"].format(
-        keywords=keywords,
-        context=context
-    )
-    
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": AFFINITY_EVALUATION_PROMPT["system"]},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0
-    )
-    
-    # Convert response to list of numbers
-    scores = eval(response.choices[0].message.content)
-    return scores
-
-def get_batch_affinity_scores(contexts, keywords, client, batch_size=int(os.getenv('BATCH_SIZE', '20'))):
-    """Gets affinity scores for multiple contexts in a single API call"""
-    
+def get_affinity_scores(context: str, keywords: List[str], client):
+    """Obtiene puntuaciones de afinidad de forma síncrona"""
     for attempt in range(MAX_RETRIES):
         try:
-            contexts_formatted = "\n".join([f"Context {i+1}: {ctx}" for i, ctx in enumerate(contexts)])
+            contexts_formatted = "\n".join([f"Context {i+1}: {ctx}" for i, ctx in enumerate([context])])
             
             prompt = f"""Evaluate the relationship between each keyword and the provided contexts, assigning an affinity score between 1 and 100 for each combination.
 
@@ -76,75 +57,67 @@ Example format: [[80, 45, 90], [70, 65, 85], [55, 95, 75]]"""
                     {"role": "system", "content": AFFINITY_EVALUATION_PROMPT["system"]},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0
+                temperature=float(os.getenv('TEMPERATURE_AFFINITY'))
             )
             
             content = response.choices[0].message.content.strip()
-            
-            # Limpiar la respuesta de posibles caracteres no deseados
             content = content.replace('```', '').strip()
             
-            try:
-                # Intentar convertir la respuesta a una lista de listas
-                scores = eval(content)
-                
-                # Validar el formato de la respuesta
-                if not isinstance(scores, list) or not all(isinstance(sublist, list) for sublist in scores):
-                    raise ValueError("Invalid response format")
-                    
-                return scores
-                
-            except (SyntaxError, ValueError) as e:
-                print(f"Error parsing response: {content}")
-                raise Exception(f"Failed to parse API response: {str(e)}")
-                
+            scores = eval(content)
+            return scores[0]
+            
         except Exception as e:
             if attempt == MAX_RETRIES - 1:
+                print(f"Final attempt failed with error: {str(e)}")
                 raise
-            print(f"Attempt {attempt + 1} failed, retrying...")
+            print(f"Attempt {attempt + 1} failed with error: {str(e)}, retrying...")
             continue
+
+def process_batch(batch_df, keywords, client):
+    """Procesa un lote de mentores de forma síncrona"""
+    results = []
+    for _, row in batch_df.iterrows():
+        try:
+            context = create_context(row)
+            scores = get_affinity_scores(context, keywords, client)
+            mentor_result = {
+                'mentor_name': row['name'],
+                'affinities': dict(zip(keywords, scores))
+            }
+            results.append(mentor_result)
+            print(f"Processed mentor: {row['name']}")
+        except Exception as e:
+            print(f"Error processing mentor {row['name']}: {str(e)}")
+    
+    return results
 
 def main():
     try:
-        # Initialize OpenAI client
-        client = setup_openai()
-        
-        # Load data
+        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         mentors_df, keywords = load_data()
         
-        # Create dictionary to store results
         results = []
-        
-        # Process mentors in batches
         batch_size = int(os.getenv('BATCH_SIZE', '10'))
+        
         for i in range(0, len(mentors_df), batch_size):
             batch_df = mentors_df.iloc[i:i+batch_size]
             print(f"\nProcessing batch of mentors {i+1}-{min(i+batch_size, len(mentors_df))}")
             
-            # Create contexts for batch
-            contexts = [create_context(row) for _, row in batch_df.iterrows()]
-            
-            # Get scores for batch
-            batch_scores = get_batch_affinity_scores(contexts, keywords, client)
-            
-            # Process results for each mentor in batch
-            for j, (_, row) in enumerate(batch_df.iterrows()):
-                print(f"Processing mentor: {row['name']}")
-                mentor_result = {
-                    'mentor_name': row['name'],
-                    'affinities': dict(zip(keywords, batch_scores[j]))
-                }
-                results.append(mentor_result)
+            batch_results = process_batch(batch_df, keywords, client)
+            results.extend(batch_results)
         
-        # Save results to JSON file with UTF-8 encoding
         with open('affinity_scores.json', 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
             
         print("\nAffinity evaluation completed successfully!")
         print("Results saved to affinity_scores.json")
+        return True
             
     except Exception as e:
         print(f"\nError: {str(e)}")
+        return False
 
 if __name__ == "__main__":
-    main() 
+    success = main()
+    if not success:
+        sys.exit(1) 
